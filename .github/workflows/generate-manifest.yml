@@ -1,0 +1,95 @@
+name: Generate Manifest
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'files/**'
+      - 'prefs.json'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Generate manifest.json
+        run: |
+          cat << 'EOF' > generate.js
+          const fs = require('fs');
+          const crypto = require('crypto');
+          const path = require('path');
+
+          const filesDir = './files';
+          const prefsFile = './prefs.json';
+          // ВНИМАНИЕ: Замените 'Feryaq/minedash.pack' на имя ВАШЕГО репозитория!
+          const baseUrl = 'https://raw.githubusercontent.com/Feryaq/minedash.pack/main/files';
+          
+          let manifest = { files: [] };
+          
+          if (fs.existsSync(prefsFile)) {
+            try {
+              const prefsData = fs.readFileSync(prefsFile, 'utf8');
+              const prefs = JSON.parse(prefsData);
+              manifest = { ...prefs, files: [] };
+            } catch (error) {
+              console.error('Ошибка чтения prefs.json:', error);
+              process.exit(1);
+            }
+          } else {
+            console.error('Файл prefs.json не найден! Создайте его в корне репозитория.');
+            process.exit(1);
+          }
+
+          function getFiles(dir, fileList = []) {
+            if (!fs.existsSync(dir)) return fileList;
+            const files = fs.readdirSync(dir);
+            for (const file of files) {
+              const filePath = path.join(dir, file);
+              if (fs.statSync(filePath).isDirectory()) {
+                getFiles(filePath, fileList);
+              } else {
+                fileList.push(filePath);
+              }
+            }
+            return fileList;
+          }
+
+          getFiles(filesDir).forEach(filePath => {
+            const fileBuffer = fs.readFileSync(filePath);
+            const hashSum = crypto.createHash('sha256');
+            hashSum.update(fileBuffer);
+            const hex = hashSum.digest('hex');
+            
+            const relativePath = path.relative(filesDir, filePath).replace(/\\/g, '/');
+            
+            manifest.files.push({
+              path: relativePath,
+              hash: hex,
+              url: `${baseUrl}/${relativePath}`
+            });
+          });
+
+          fs.writeFileSync('manifest.json', JSON.stringify(manifest, null, 2));
+          console.log('manifest.json generated successfully!');
+          EOF
+          node generate.js
+
+      - name: Commit and push changes
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add manifest.json
+          git commit -m "Auto-update manifest.json [skip ci]" || echo "No changes to commit"
+          git push
